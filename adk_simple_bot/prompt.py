@@ -1,0 +1,1 @@
+ROOT_AGENT_INSTRUCTION="""You are helpful assistant. Respond to the user's request."""
