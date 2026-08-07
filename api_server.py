@@ -119,7 +119,7 @@ class CreateSessionRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     user_id:    str  = Field(..., example="user_001")
-    session_id: str  = Field(..., example="1234567890")
+    session_id: str | None = Field(None, example="1234567890")
     message:    str  = Field(..., example="What is the weather in Delhi?")
 
 
@@ -129,7 +129,7 @@ class SessionResponse(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    session_id: str
+    session_id: str | None = None
     user_id:    str
     message:    str
     reply:      str
@@ -299,12 +299,17 @@ async def chat(body: ChatRequest):
     current_call = None
 
     for event in events:
+        if not event:
+            continue
         err = event.get("error_message", "")
         if err:
             raise HTTPException(status_code=500, detail=f"Agent error: {err}")
             
-        parts = event.get("content", {}).get("parts", [])
+        content = event.get("content") or {}
+        parts = content.get("parts") or []
         for part in parts:
+            if not part:
+                continue
             # 1. Plain text reply
             text = part.get("text", "")
             if text:
@@ -426,8 +431,11 @@ async def chat_stream(body: ChatRequest):
                             return
 
                         # Extract and stream text & actions/tools parts
-                        parts = event.get("content", {}).get("parts", [])
+                        content = event.get("content") or {}
+                        parts = content.get("parts") or []
                         for part in parts:
+                            if not part:
+                                continue
                             # 1. Plain Text Chunk
                             text = part.get("text", "")
                             if text:
