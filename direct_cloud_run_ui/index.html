@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADK Direct Cloud Run Workspace</title>
+  
+  <!-- Modern Typography and Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+  
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- CRED-style Ambient Background Glow Blobs -->
+  <div class="ambient-glow glow-top-right"></div>
+  <div class="ambient-glow glow-bottom-left"></div>
+
+  <div class="app-container">
+    
+    <!-- Left Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="material-symbols-rounded logo-icon">smart_toy</span>
+        <div class="logo-text">
+          <h1>Direct Cloud Run</h1>
+          <span class="version-badge">v2.6.2</span>
+        </div>
+      </div>
+      
+      <button class="new-chat-btn" id="new-chat-btn">
+        <span class="material-symbols-rounded">add</span>
+        New Session
+      </button>
+      
+      <div class="sessions-list" id="sessions-list">
+        <!-- Rendered dynamically -->
+      </div>
+      
+      <div class="sidebar-footer">
+        <div class="server-status">
+          <span class="status-dot online"></span>
+          <span id="status-text">Directly Connected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="chat-area">
+      <!-- Chat Header -->
+      <header class="chat-header">
+        <div class="header-left">
+          <h2>adk_simple_bot</h2>
+          <span class="model-badge">gemini-2.5-flash</span>
+        </div>
+        <div class="header-right">
+          <span class="session-info-pill" id="session-info-pill" title="Click to copy Session ID">
+            <span class="material-symbols-rounded">database</span>
+            <span id="current-session-id">No Session</span>
+          </span>
+        </div>
+      </header>
+
+      <!-- Chat Feed -->
+      <div class="chat-feed" id="chat-feed">
+        <div class="welcome-container" id="welcome-container">
+          <span class="material-symbols-rounded welcome-icon">forum</span>
+          <h3>Welcome to adk_simple_bot</h3>
+          <p>
+            An intelligent AI agent running live on **Google Cloud Run**.
+            This interface queries your Cloud Run endpoint **directly** with no local server.
+          </p>
+          <div class="suggestions">
+            <button class="suggestion-card" onclick="sendSuggestion('What is the weather in Delhi?')">
+              <span class="material-symbols-rounded">cloud</span>
+              <span>"What is the weather in Delhi?"</span>
+            </button>
+            <button class="suggestion-card" onclick="sendSuggestion('Can you shorten this: The meeting scheduled for tomorrow has been postponed to next week.')">
+              <span class="material-symbols-rounded">compress</span>
+              <span>"Can you shorten this message..."</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Form -->
+      <footer class="chat-footer">
+        <form class="input-form" id="chat-form">
+          <div class="input-wrapper">
+            <input 
+              type="text" 
+              id="chat-input" 
+              placeholder="Ask adk_simple_bot a question..." 
+              autocomplete="off"
+            >
+            <button type="submit" class="send-btn" id="send-btn">
+              <span class="material-symbols-rounded">arrow_upward</span>
+            </button>
+          </div>
+        </form>
+        <div class="footer-note">
+          Google Cloud Run Workspace • Direct Browser Connection (Bypassing Local Proxy)
+        </div>
+      </footer>
+
+    </main>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
