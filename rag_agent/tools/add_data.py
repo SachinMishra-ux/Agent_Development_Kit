@@ -65,7 +65,8 @@ def add_data(
             invalid_paths.append(f"{path} (Not a valid string)")
             continue
 
-        # Check for Google Docs/Sheets/Slides URLs and convert them to Drive format
+        # Vertex AI's rag.import_files requires standard Google Drive URIs (/file/d/{id}/view)
+        # or Cloud Storage URIs (gs://). Normalize native Google Docs/Sheets/Slides URLs.
         docs_match = re.match(
             r"https:\/\/docs\.google\.com\/(?:document|spreadsheets|presentation)\/d\/([a-zA-Z0-9_-]+)(?:\/|$)",
             path,

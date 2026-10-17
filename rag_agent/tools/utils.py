@@ -33,7 +33,8 @@ def get_corpus_resource_name(corpus_name: str) -> str:
     if re.match(r"^projects/[^/]+/locations/[^/]+/ragCorpora/[^/]+$", corpus_name):
         return corpus_name
 
-    # Check if this is a display name of an existing corpus
+    # Vertex AI APIs require the canonical resource URI, but users specify human-readable
+    # display names. Query available corpora to dynamically resolve display name -> resource URI.
     try:
         # List all corpora and check if there's a match with the display name
         corpora = rag.list_corpora()

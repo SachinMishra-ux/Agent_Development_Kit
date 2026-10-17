@@ -9,6 +9,7 @@ This subagent is solely responsible for technical audio production:
 """
 
 from google.adk import Agent
+from google.adk.tools import FunctionTool
 from google.genai import types
 
 from podcast_agent.prompt import (
@@ -17,8 +18,18 @@ from podcast_agent.prompt import (
 )
 from podcast_agent.tools import generate_podcast_audio
 
+# ── Pattern 2: Native Tool Confirmation Gate ──────────────────────────────────
+# By wrapping generate_podcast_audio with FunctionTool(..., require_confirmation=True),
+# Google ADK intercepts the function call before running. In the ADK Web UI, this
+# displays an interactive Confirmation Card with a checkbox and "Submit" button,
+# allowing the user to explicitly approve or reject tool execution directly in the UI.
+generate_podcast_audio_tool = FunctionTool(
+    func=generate_podcast_audio,
+    require_confirmation=True,
+)
+
 # ── Audio Producer Agent Definition ───────────────────────────────────────────
-# Equipped ONLY with generate_podcast_audio tool.
+# Equipped ONLY with generate_podcast_audio_tool.
 audio_producer_agent = Agent(
     name="audio_producer_agent",
     model="gemini-3.1-flash-lite",
@@ -29,8 +40,8 @@ audio_producer_agent = Agent(
     # Shared static instruction maintains context cache prefix alignment across handoffs
     static_instruction=PODCAST_STUDIO_STATIC_INSTRUCTION,
     instruction=AUDIO_PRODUCER_INSTRUCTION,
-    # Sole tool: Neural TTS synthesis and artifact saving
-    tools=[generate_podcast_audio],
+    # Sole tool: Neural TTS synthesis with native HITL tool confirmation gate
+    tools=[generate_podcast_audio_tool],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.3,
     ),

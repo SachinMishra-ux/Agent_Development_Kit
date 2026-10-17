@@ -46,13 +46,19 @@ def create_corpus(
         )
 
         # Create the corpus
-        rag_corpus = rag.create_corpus(
-            display_name=display_name,
-            backend_config=rag.RagVectorDbConfig(
-                rag_embedding_model_config=embedding_model_config,
-                vector_db=rag.RagManagedVertexVectorSearch(),
-            ),
-        )
+        # Uses standard regional creation which automatically leverages the active managed tier
+        try:
+            rag_corpus = rag.create_corpus(
+                display_name=display_name,
+            )
+        except Exception:
+            # Secondary fallback: create with explicit embedding model configuration
+            rag_corpus = rag.create_corpus(
+                display_name=display_name,
+                backend_config=rag.RagVectorDbConfig(
+                    rag_embedding_model_config=embedding_model_config,
+                ),
+            )
 
         # Update state to track corpus existence
         tool_context.state[f"corpus_exists_{corpus_name}"] = True

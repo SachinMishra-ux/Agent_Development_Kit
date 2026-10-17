@@ -24,20 +24,37 @@ The agent operates on Google ADK's **Collaborative Workflows** pattern with clea
                                     │ • load_artifacts          │
                                     └─────────────┬─────────────┘
                                                   │
-                      ┌───────────────────────────┼───────────────────────────┐
-                      │ 1. Mandatory Research     │ 2. Scriptwriting          │ 3. Audio Synthesis
-                      ▼                           ▼                           ▼
-           ┌─────────────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
-           │   research_agent    │     │  scriptwriter_agent │     │audio_producer_agent │
-           │                     │     │                     │     │                     │
-           │ • Tools:            │     │ • Tools: None       │     │ • Tools:            │
-           │   google_search     │     │ • 2 or 3 Personas   │     │   generate_podcast_ │
-           │ • Live web facts,   │     │ • Spoken dialogue   │     │   audio             │
-           │   stats & debate    │     │ • Transfers back to │     │ • Neural Edge-TTS   │
-           │   angles            │     │   coordinator       │     │ • Emits MP3 Session │
-           │ • Transfers back to │     │                     │     │   Artifact          │
-           │   coordinator       │     │                     │     │                     │
-           └─────────────────────┘     └─────────────────────┘     └─────────────────────┘
+                 ┌────────────────────────────────┴────────────────────────────────┐
+                 │ 1. Mandatory Research             2. Scriptwriting              │
+                 ▼                                   ▼                             │
+      ┌─────────────────────┐             ┌─────────────────────┐                  │
+      │   research_agent    │             │  scriptwriter_agent │                  │
+      │                     │             │                     │                  │
+      │ • google_search     │             │ • 2 or 3 Personas   │                  │
+      │ • Live web facts &  │             │ • Spoken dialogue   │                  │
+      │   debate angles     │             │ • Transfers back to │                  │
+      │ • Transfers back to │             │   coordinator       │                  │
+      │   coordinator       │             └──────────┬──────────┘                  │
+      └─────────────────────┘                        │                             │
+                                                     ▼                             │
+                                          ┌─────────────────────┐                  │
+                                          │ 🛑 HUMAN-IN-THE-    │                  │
+                                          │    LOOP GATE        │                  │
+                                          │ • Review Transcript │                  │
+                                          │ • Approve / Edit /  │                  │
+                                          │   Re-research       │                  │
+                                          └──────────┬──────────┘                  │
+                                                     │ (Only if Approved)          │
+                                                     ▼                             │
+                                          ┌─────────────────────┐                  │
+                                          │audio_producer_agent │◄─────────────────┘
+                                          │                     │ 3. Audio Synthesis
+                                          │ • generate_podcast_ │    (Approved Only)
+                                          │   audio             │
+                                          │ • Neural Edge-TTS   │
+                                          │ • Emits MP3 Session │
+                                          │   Artifact          │
+                                          └─────────────────────┘
 ```
 
 ### Components & Roles
@@ -45,9 +62,8 @@ The agent operates on Google ADK's **Collaborative Workflows** pattern with clea
 1. **Root Coordinator Agent (`podcast_agent`)**:
    - Manages episode planning and user inputs.
    - Uses `read_document` to inspect uploaded files (PDFs, Word docs, text).
-   - **Enforces the production pipeline**: delegates to `research_agent`, then to `scriptwriter_agent`, and finally to `audio_producer_agent`.
-   - Surfaces final transcripts and points users to the generated audio in the **Artifacts tab**.
-   - Handles Human-in-the-Loop (HITL) feedback and revision requests.
+   - **Enforces the production pipeline**: delegates to `research_agent`, then to `scriptwriter_agent`, halts for the **Human-in-the-Loop approval gate**, and only delegates to `audio_producer_agent` upon approval.
+   - Surfaces draft transcripts, handles revision cycles, and points users to the generated audio in the **Artifacts tab**.
 
 2. **Research Subagent (`research_agent`)**:
    - Equipped solely with `google_search` for real-time web grounding and factual verification.
@@ -55,7 +71,7 @@ The agent operates on Google ADK's **Collaborative Workflows** pattern with clea
    - Transfers the completed research brief back to `podcast_agent`.
 
 3. **Scriptwriter Subagent (`scriptwriter_agent`)**:
-   - Focuses 100% on dialogue writing without any tool distraction.
+   - Focuses 100% on dialogue writing and iterative revisions without any tool distraction.
    - Dynamically crafts spoken conversations tailored to the requested speaker count:
      - **2 Speakers**:
        * **Alex (Host)**: Inquisitive, charismatic narrator who frames questions.
@@ -64,11 +80,11 @@ The agent operates on Google ADK's **Collaborative Workflows** pattern with clea
        * **Alex (Host)**: Moderator keeping time and guiding transitions.
        * **Morgan (Expert)**: Deep technical and factual authority.
        * **Taylor (Skeptic)**: Critical thinker who questions assumptions and plays devil's advocate.
-   - Transfers the completed script turns back to `podcast_agent`.
+   - Transfers the completed script turns back to `podcast_agent` for human editorial review.
 
 4. **Audio Producer Subagent (`audio_producer_agent`)**:
    - Equipped with `generate_podcast_audio`.
-   - Receives the approved dialogue turns and synthesizes the neural multi-speaker MP3 audio track.
+   - Receives the **approved** dialogue turns and synthesizes the neural multi-speaker MP3 audio track.
    - Saves the final audio file directly into the **ADK Session Artifacts**, triggering the `artifact_delta` event so the audio appears in ADK Web.
    - Transfers confirmation back to `podcast_agent`.
 
@@ -97,11 +113,18 @@ The agent operates on Google ADK's **Collaborative Workflows** pattern with clea
 
 ## 3. Human-in-the-Loop (HITL) Workflow
 
-The system provides conversational script review and feedback:
-1. Once the audio producer finishes generating the MP3, the coordinator prints the full dialogue in the chat and alerts the user to the **Artifacts tab**.
-2. The user can request revisions:
-   > *"Make Morgan sound more casual, and let Taylor challenge the timeline in turn 4."*
-3. The coordinator passes the feedback back to `scriptwriter_agent` to update the script, and then to `audio_producer_agent` to re-synthesize the updated audio track.
+The system enforces a **strict Human-in-the-Loop editorial gate immediately after scriptwriting and before audio generation**:
+
+1. **Script Presentation & Pause (Turn 1)**:
+   - `scriptwriter_agent` crafts the dialogue turns and returns them to `podcast_agent`.
+   - `podcast_agent` displays the full dialogue script directly in the chat, halts execution, and explicitly prompts the user:
+     - **APPROVE**: Reply `"Approve"` or `"Looks good"` to authorize audio generation.
+     - **EDIT / REVISE**: Reply with desired adjustments (e.g., *"Make Morgan more skeptical"*, *"Shorten turn 2"*, *"Add Taylor as a 3rd host"*).
+     - **RE-RESEARCH / REJECT**: Reply if you want fresh research on a different angle or topic.
+
+2. **Branching Logic (Turn 2+)**:
+   - **On Revision**: `podcast_agent` routes the feedback back to `scriptwriter_agent` (and `research_agent` if new information is needed). The script is updated and presented again for review. **Zero audio is synthesized during revisions**, saving compute and time.
+   - **On Approval**: `podcast_agent` transfers the finalized script to `audio_producer_agent`. The neural MP3 is generated, saved to **ADK Session Artifacts**, and made available for immediate playback and download in the **Artifacts tab**.
 
 ---
 

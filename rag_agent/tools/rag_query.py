@@ -45,7 +45,8 @@ def rag_query(
         # Get the corpus resource name
         corpus_resource_name = get_corpus_resource_name(corpus_name)
 
-        # Configure retrieval parameters
+        # Configure retrieval: top_k limits retrieved chunks, while vector_distance_threshold
+        # excludes low-similarity matches so irrelevant context does not dilute the prompt.
         rag_retrieval_config = rag.RagRetrievalConfig(
             top_k=DEFAULT_TOP_K,
             filter=rag.Filter(vector_distance_threshold=DEFAULT_DISTANCE_THRESHOLD),

@@ -21,6 +21,7 @@ import edge_tts
 from google.genai import types
 
 from google.adk.tools.tool_context import ToolContext
+from podcast_agent.schemas import DialogueTurn, PodcastScript
 
 # ── 1. Voice Mapping Configuration ───────────────────────────────────────────
 # Defines distinct, high-quality Microsoft Neural TTS voices for podcast personas:
@@ -124,15 +125,25 @@ async def generate_podcast_audio(
     if not turns:
         return "Error: Script is empty. Please provide dialogue turns with 'speaker' and 'text'."
 
-    # Normalize turn elements into plain dictionaries
-    sanitized_turns = []
+    # Normalize and validate turn elements using Pydantic DialogueTurn schema
+    sanitized_turns: list[dict[str, str]] = []
     for item in turns:
-        if isinstance(item, dict):
-            sanitized_turns.append(item)
-        elif hasattr(item, "model_dump"):
-            sanitized_turns.append(item.model_dump())
-        elif hasattr(item, "dict"):
-            sanitized_turns.append(item.dict())
+        try:
+            if isinstance(item, DialogueTurn):
+                sanitized_turns.append(item.model_dump())
+            elif isinstance(item, dict):
+                turn_obj = DialogueTurn.model_validate(item)
+                sanitized_turns.append(turn_obj.model_dump())
+            elif hasattr(item, "model_dump"):
+                turn_obj = DialogueTurn.model_validate(item.model_dump())
+                sanitized_turns.append(turn_obj.model_dump())
+            elif hasattr(item, "dict"):
+                turn_obj = DialogueTurn.model_validate(item.dict())
+                sanitized_turns.append(turn_obj.model_dump())
+        except Exception:
+            # Fallback for loose dictionaries if strict validation fails
+            if isinstance(item, dict) and "speaker" in item and "text" in item:
+                sanitized_turns.append({"speaker": str(item["speaker"]), "text": str(item["text"])})
     turns = sanitized_turns
 
     # ── Block B: Output Directories & Path Setup ─────────────────────────────
