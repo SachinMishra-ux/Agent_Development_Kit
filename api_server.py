@@ -1,5 +1,5 @@
 """
-Secure FastAPI proxy server for adk_simple_bot on Vertex AI Agent Engine.
+Secure FastAPI proxy server for adk_simple_bot on Google Cloud Run (and Vertex AI Agent Engine).
 
 Features:
   - API Key authentication on every endpoint (X-API-Key header)
@@ -14,15 +14,16 @@ Run with:
     uv run uvicorn api_server:app --host 0.0.0.0 --port 8080 --reload
 
 Environment variables (in .env):
-    API_SECRET_KEY   → your chosen API key that clients must send
-    GOOGLE_CLOUD_PROJECT    → GCP project ID (optional, falls back to hardcoded)
-    GOOGLE_CLOUD_LOCATION   → GCP region    (optional, falls back to hardcoded)
+    API_SECRET_KEY        → your chosen API key that clients must send
+    GOOGLE_CLOUD_RUN_URL  → Cloud Run deployed service URL (preferred)
+    GOOGLE_CLOUD_PROJECT  → GCP project ID (optional, falls back to hardcoded)
+    GOOGLE_CLOUD_LOCATION → GCP region    (optional, falls back to hardcoded)
 """
 
 import os
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 import httpx
 import google.auth
@@ -41,7 +42,10 @@ load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("adk_api")
 
-# ── Vertex AI Agent Engine config ─────────────────────────────────────────────
+# ── Cloud Run / Vertex AI Config ──────────────────────────────────────────────
+CLOUD_RUN_URL = os.getenv("GOOGLE_CLOUD_RUN_URL", "").rstrip("/")
+APP_NAME      = "adk_simple_bot"
+
 PROJECT_ID  = os.getenv("GOOGLE_CLOUD_PROJECT",  "email-copilotmy-project-20497")
 LOCATION    = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 ENGINE_ID   = os.getenv("GOOGLE_CLOUD_ENGINE_ID", "7211680823664181248")
@@ -58,14 +62,8 @@ STREAM_QUERY_URL = (
     f"/reasoningEngines/{ENGINE_ID}:streamQuery?alt=sse"
 )
 
-SESSION_BASE_URL = (
-    f"https://{LOCATION}-aiplatform.googleapis.com/v1"
-    f"/projects/{PROJECT_ID}/locations/{LOCATION}"
-    f"/reasoningEngines/{ENGINE_ID}/sessions"
-)
-
 # ── API Key security ──────────────────────────────────────────────────────────
-API_SECRET_KEY   = os.getenv("API_SECRET_KEY", "change-me-before-production")
+API_SECRET_KEY   = os.getenv("API_SECRET_KEY", "adk-bot-secret-key-change-me")
 API_KEY_HEADER   = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
@@ -90,10 +88,7 @@ _gcp_auth_request = google.auth.transport.requests.Request()
 
 
 def get_google_access_token() -> str:
-    """
-    Returns a fresh Bearer token from Application Default Credentials.
-    Refreshes automatically when the token is about to expire.
-    """
+    """Returns a fresh Bearer token from Application Default Credentials."""
     global _gcp_credentials
     if _gcp_credentials is None:
         _gcp_credentials, _ = google.auth.default(
@@ -119,7 +114,7 @@ class CreateSessionRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     user_id:    str  = Field(..., example="user_001")
-    session_id: str | None = Field(None, example="1234567890")
+    session_id: Optional[str] = Field(None, example="1234567890")
     message:    str  = Field(..., example="What is the weather in Delhi?")
 
 
@@ -129,7 +124,7 @@ class SessionResponse(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    session_id: str | None = None
+    session_id: Optional[str] = None
     user_id:    str
     message:    str
     reply:      str
@@ -141,15 +136,15 @@ app = FastAPI(
     title="adk_simple_bot API",
     description=(
         "Secure proxy API for the adk_simple_bot deployed on "
-        "Google Cloud Vertex AI Agent Engine. "
-        "All endpoints require an `X-API-Key` header."
+        "Google Cloud Run / Vertex AI Agent Engine. "
+        "All protected endpoints require an `X-API-Key` header."
     ),
-    version="1.0.0",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
-# Allow all origins for frontend consumption — tighten in production
+# Allow all origins for frontend consumption
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -159,14 +154,15 @@ app.add_middleware(
 )
 
 
-# ── Health check (public — no auth needed) ────────────────────────────────────
+# ── Health & Config ───────────────────────────────────────────────────────────
 @app.get("/health", tags=["Health"])
 async def health():
     """Public health-check endpoint."""
     return {
         "status": "ok",
-        "agent": "adk_simple_bot",
-        "engine_id": ENGINE_ID,
+        "agent": APP_NAME,
+        "backend": "cloud_run" if CLOUD_RUN_URL else "vertex_ai",
+        "cloud_run_url": CLOUD_RUN_URL or None,
         "project": PROJECT_ID,
         "region": LOCATION,
     }
@@ -176,8 +172,26 @@ async def health():
 async def get_config():
     """Public config endpoint to share API Key with local frontend automatically."""
     return {
-        "api_key": API_SECRET_KEY
+        "api_key": API_SECRET_KEY,
+        "mode": "cloud_run" if CLOUD_RUN_URL else "vertex_ai",
+        "cloud_run_url": CLOUD_RUN_URL or None,
     }
+
+
+# ── Helper for Cloud Run Session ──────────────────────────────────────────────
+async def _create_cloud_run_session(user_id: str) -> str:
+    session_endpoint = f"{CLOUD_RUN_URL}/apps/{APP_NAME}/users/{user_id}/sessions"
+    log.info("Creating session on Cloud Run for user %s: %s", user_id, session_endpoint)
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(session_endpoint, json={})
+    if resp.status_code != 200:
+        log.error("Cloud Run create session failed: %s %s", resp.status_code, resp.text)
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    data = resp.json()
+    session_id = data.get("id")
+    if not session_id:
+        raise HTTPException(status_code=500, detail="Cloud Run session returned no ID.")
+    return session_id
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -192,23 +206,22 @@ async def get_config():
     dependencies=[Depends(verify_api_key)],
 )
 async def create_session(body: CreateSessionRequest):
-    """
-    Creates a new session on the Agent Engine for the given user.
-    Returns a session_id that must be passed with every /chat request.
-    """
+    """Creates a new stateful session."""
+    if CLOUD_RUN_URL:
+        session_id = await _create_cloud_run_session(body.user_id)
+        log.info("Cloud Run session created: %s for user: %s", session_id, body.user_id)
+        return SessionResponse(session_id=session_id, user_id=body.user_id)
+
+    # Fallback to Vertex AI Agent Engine
     payload = {"class_method": "create_session", "input": {"user_id": body.user_id}}
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(QUERY_URL, headers=gcp_headers(), json=payload)
-
     if resp.status_code != 200:
         log.error("create_session failed: %s %s", resp.status_code, resp.text)
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
-
-    data       = resp.json()
-    output     = data.get("output", {})
+    data = resp.json()
+    output = data.get("output", {})
     session_id = output.get("id") or output.get("name", "").split("/")[-1]
-
-    log.info("Session created: %s for user: %s", session_id, body.user_id)
     return SessionResponse(session_id=session_id, user_id=body.user_id)
 
 
@@ -220,13 +233,20 @@ async def create_session(body: CreateSessionRequest):
 )
 async def get_session(session_id: str, user_id: str):
     """Fetch details of an existing session."""
+    if CLOUD_RUN_URL:
+        url = f"{CLOUD_RUN_URL}/apps/{APP_NAME}/users/{user_id}/sessions/{session_id}"
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        return resp.json()
+
     payload = {
         "class_method": "get_session",
         "input": {"user_id": user_id, "session_id": session_id},
     }
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(QUERY_URL, headers=gcp_headers(), json=payload)
-
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
     return resp.json().get("output", {})
@@ -240,17 +260,22 @@ async def get_session(session_id: str, user_id: str):
 )
 async def delete_session(session_id: str, user_id: str):
     """Delete an existing session."""
+    if CLOUD_RUN_URL:
+        url = f"{CLOUD_RUN_URL}/apps/{APP_NAME}/users/{user_id}/sessions/{session_id}"
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.delete(url)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        return {"detail": f"Session {session_id} deleted successfully."}
+
     payload = {
         "class_method": "delete_session",
         "input": {"user_id": user_id, "session_id": session_id},
     }
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(QUERY_URL, headers=gcp_headers(), json=payload)
-
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
-
-    log.info("Session deleted: %s", session_id)
     return {"detail": f"Session {session_id} deleted successfully."}
 
 
@@ -266,12 +291,80 @@ async def delete_session(session_id: str, user_id: str):
     dependencies=[Depends(verify_api_key)],
 )
 async def chat(body: ChatRequest):
-    """
-    Sends a message to the agent and waits for the complete reply.
-    Returns a single JSON object with the agent's full response.
+    """Sends a message to the agent and waits for the complete reply."""
+    session_id = body.session_id
 
-    Use this for simple request/response interactions.
-    """
+    # ── Cloud Run flow ──
+    if CLOUD_RUN_URL:
+        if not session_id:
+            session_id = await _create_cloud_run_session(body.user_id)
+
+        run_url = f"{CLOUD_RUN_URL}/run"
+        payload = {
+            "appName": APP_NAME,
+            "userId": body.user_id,
+            "sessionId": session_id,
+            "newMessage": {
+                "role": "user",
+                "parts": [{"text": body.message}]
+            }
+        }
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(run_url, json=payload)
+
+        if resp.status_code != 200:
+            log.error("Cloud Run /run error: %s %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+        events = resp.json()
+        reply_texts = []
+        tool_calls = []
+        current_call = None
+
+        for event in events:
+            if not event:
+                continue
+            content = event.get("content") or {}
+            parts = content.get("parts") or []
+            for part in parts:
+                if not part:
+                    continue
+                # Plain text
+                text = part.get("text")
+                if text:
+                    reply_texts.append(text)
+                # Tool Function Call
+                fc = part.get("functionCall") or part.get("function_call")
+                if fc:
+                    current_call = {
+                        "name": fc.get("name"),
+                        "args": fc.get("args"),
+                        "id": fc.get("id"),
+                        "response": None
+                    }
+                    tool_calls.append(current_call)
+                # Tool Function Response
+                fr = part.get("functionResponse") or part.get("function_response")
+                if fr:
+                    if current_call and current_call.get("id") == fr.get("id"):
+                        current_call["response"] = fr.get("response")
+                    else:
+                        for tc in reversed(tool_calls):
+                            if tc.get("name") == fr.get("name") and tc.get("response") is None:
+                                tc["response"] = fr.get("response")
+                                break
+
+        reply = "".join(reply_texts).strip()
+        return ChatResponse(
+            session_id=session_id,
+            user_id=body.user_id,
+            message=body.message,
+            reply=reply,
+            tool_calls=tool_calls
+        )
+
+    # ── Vertex AI Agent Engine flow (legacy) ──
     payload = {
         "class_method": "stream_query",
         "input": {
@@ -290,12 +383,8 @@ async def chat(body: ChatRequest):
 
     data   = resp.json()
     events = data.get("output", [])
-
-    # Collect text parts and surface any errors
     texts = []
     tool_calls = []
-    
-    # Track current active function call to pair it with its response
     current_call = None
 
     for event in events:
@@ -304,18 +393,14 @@ async def chat(body: ChatRequest):
         err = event.get("error_message", "")
         if err:
             raise HTTPException(status_code=500, detail=f"Agent error: {err}")
-            
         content = event.get("content") or {}
         parts = content.get("parts") or []
         for part in parts:
             if not part:
                 continue
-            # 1. Plain text reply
             text = part.get("text", "")
             if text:
                 texts.append(text)
-                
-            # 2. Tool function call
             fc = part.get("function_call", {})
             if fc:
                 current_call = {
@@ -325,32 +410,17 @@ async def chat(body: ChatRequest):
                     "response": None
                 }
                 tool_calls.append(current_call)
-                
-            # 3. Tool response
             fr = part.get("function_response", {})
             if fr:
-                # Pair with the active call
                 if current_call and current_call.get("id") == fr.get("id"):
                     current_call["response"] = fr.get("response")
                 else:
-                    # Fallback match by name
-                    matched = False
                     for tc in reversed(tool_calls):
                         if tc.get("name") == fr.get("name") and tc.get("response") is None:
                             tc["response"] = fr.get("response")
-                            matched = True
                             break
-                    if not matched:
-                        tool_calls.append({
-                            "name": fr.get("name"),
-                            "args": None,
-                            "id": fr.get("id"),
-                            "response": fr.get("response")
-                        })
 
     reply = "".join(texts).strip()
-    log.info("Chat reply for user %s: %s chars, %s tool calls", body.user_id, len(reply), len(tool_calls))
-
     return ChatResponse(
         session_id=body.session_id,
         user_id=body.user_id,
@@ -368,39 +438,87 @@ async def chat(body: ChatRequest):
     response_class=StreamingResponse,
 )
 async def chat_stream(body: ChatRequest):
-    """
-    Sends a message to the agent and streams the response as Server-Sent Events (SSE).
-
-    Each SSE event is a JSON object:
-    ```
-    data: {"type": "text", "content": "Hello there!"}
-    data: {"type": "tool_call", "name": "dummy_wether", "args": {...}}
-    data: {"type": "tool_response", "name": "dummy_wether", "response": {...}}
-    data: {"type": "done"}
-    data: {"type": "error", "content": "...error message..."}
-    ```
-
-    Use this for real-time, token-by-token streaming in your frontend.
-    Connect with `EventSource` (JavaScript) or any SSE client.
-    """
-    payload = {
-        "class_method": "stream_query",
-        "input": {
-            "message":    body.message,
-            "user_id":    body.user_id,
-            "session_id": body.session_id,
-        },
-    }
+    """Sends a message to the agent and streams the response as Server-Sent Events (SSE)."""
 
     async def sse_generator() -> AsyncGenerator[str, None]:
+        session_id = body.session_id
+
+        # ── Cloud Run flow ──
+        if CLOUD_RUN_URL:
+            if not session_id:
+                try:
+                    session_id = await _create_cloud_run_session(body.user_id)
+                    yield f"data: {json.dumps({'type': 'session_created', 'session_id': session_id})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'content': f'Session creation failed: {str(e)}'})}\n\n"
+                    return
+
+            run_sse_url = f"{CLOUD_RUN_URL}/run_sse"
+            payload = {
+                "appName": APP_NAME,
+                "userId": body.user_id,
+                "sessionId": session_id,
+                "newMessage": {
+                    "role": "user",
+                    "parts": [{"text": body.message}]
+                }
+            }
+
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    async with client.stream("POST", run_sse_url, json=payload) as response:
+                        if response.status_code != 200:
+                            yield f"data: {json.dumps({'type': 'error', 'content': f'Cloud Run stream error: {response.status_code}'})}\n\n"
+                            return
+
+                        async for raw_line in response.aiter_lines():
+                            if not raw_line:
+                                continue
+                            raw = raw_line.strip()
+                            if raw.startswith("data:"):
+                                raw = raw[5:].strip()
+                            if not raw:
+                                continue
+                            try:
+                                event = json.loads(raw)
+                            except json.JSONDecodeError:
+                                continue
+
+                            content = event.get("content") or {}
+                            parts = content.get("parts") or []
+                            for part in parts:
+                                if not part:
+                                    continue
+                                text = part.get("text")
+                                if text:
+                                    yield f"data: {json.dumps({'type': 'text', 'content': text})}\n\n"
+                                fc = part.get("functionCall") or part.get("function_call")
+                                if fc:
+                                    yield f"data: {json.dumps({'type': 'tool_call', 'name': fc.get('name'), 'args': fc.get('args'), 'id': fc.get('id')})}\n\n"
+                                fr = part.get("functionResponse") or part.get("function_response")
+                                if fr:
+                                    yield f"data: {json.dumps({'type': 'tool_response', 'name': fr.get('name'), 'response': fr.get('response'), 'id': fr.get('id')})}\n\n"
+
+            except Exception as e:
+                log.exception("Cloud Run SSE stream error")
+                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+            finally:
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            return
+
+        # ── Vertex AI Agent Engine flow (legacy) ──
+        payload = {
+            "class_method": "stream_query",
+            "input": {
+                "message":    body.message,
+                "user_id":    body.user_id,
+                "session_id": body.session_id,
+            },
+        }
+
         try:
             async with httpx.AsyncClient(timeout=120) as client:
-                async with client.stream(
-                    "POST",
-                    STREAM_QUERY_URL,
-                    headers=gcp_headers(),
-                    json=payload,
-                ) as resp:
+                async with client.stream("POST", STREAM_QUERY_URL, headers=gcp_headers(), json=payload) as resp:
                     if resp.status_code != 200:
                         error_body = await resp.aread()
                         yield f"data: {json.dumps({'type': 'error', 'content': error_body.decode()})}\n\n"
@@ -410,56 +528,35 @@ async def chat_stream(body: ChatRequest):
                         line = line.strip()
                         if not line:
                             continue
-
-                        # Clean data: prefix if present (fallback support)
                         raw = line
                         if raw.startswith("data:"):
-                            raw = raw[len("data:"):].strip()
-
+                            raw = raw[5:].strip()
                         if raw == "[DONE]":
                             break
-
                         try:
                             event = json.loads(raw)
                         except json.JSONDecodeError:
                             continue
 
-                        # Surface error events
                         err = event.get("error_message", "")
                         if err:
                             yield f"data: {json.dumps({'type': 'error', 'content': err})}\n\n"
                             return
 
-                        # Extract and stream text & actions/tools parts
                         content = event.get("content") or {}
                         parts = content.get("parts") or []
                         for part in parts:
                             if not part:
                                 continue
-                            # 1. Plain Text Chunk
                             text = part.get("text", "")
                             if text:
                                 yield f"data: {json.dumps({'type': 'text', 'content': text})}\n\n"
-                                
-                            # 2. Tool Function Call
                             fc = part.get("function_call", {})
                             if fc:
-                                yield f"data: {json.dumps({
-                                    'type': 'tool_call', 
-                                    'name': fc.get('name'), 
-                                    'args': fc.get('args'),
-                                    'id': fc.get('id')
-                                })}\n\n"
-                                
-                            # 3. Tool Function Response
+                                yield f"data: {json.dumps({'type': 'tool_call', 'name': fc.get('name'), 'args': fc.get('args'), 'id': fc.get('id')})}\n\n"
                             fr = part.get("function_response", {})
                             if fr:
-                                yield f"data: {json.dumps({
-                                    'type': 'tool_response', 
-                                    'name': fr.get('name'), 
-                                    'response': fr.get('response'),
-                                    'id': fr.get('id')
-                                })}\n\n"
+                                yield f"data: {json.dumps({'type': 'tool_response', 'name': fr.get('name'), 'response': fr.get('response'), 'id': fr.get('id')})}\n\n"
 
         except Exception as e:
             log.exception("SSE stream error")
@@ -472,7 +569,7 @@ async def chat_stream(body: ChatRequest):
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",       # disable nginx buffering
+            "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
     )
