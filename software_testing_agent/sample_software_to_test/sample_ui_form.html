@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>User Registration Portal</title>
+    <!-- Intentional Bug: Missing responsive viewport meta tag -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <!-- Intentional Bug: Image missing alt attribute (WCAG 1.1.1) -->
+        <img src="logo.png">
+        <h1>Welcome to User Registration</h1>
+    </header>
+
+    <main>
+        <form id="registration-form">
+            <!-- Intentional Bug: Form input missing label or aria-label (WCAG 1.3.1 / 4.1.2) -->
+            <input type="text" id="username" placeholder="Enter username">
+
+            <!-- Properly labeled email input -->
+            <label for="email">Email Address:</label>
+            <input type="email" id="email" required>
+
+            <!-- Intentional Bug: Empty icon button without aria-label (WCAG 4.1.2) -->
+            <button type="submit" id="submit-btn"></button>
+        </form>
+
+        <!-- Intentional Bug: target="_blank" without rel="noopener noreferrer" -->
+        <a href="https://external-partner.com/terms" target="_blank">Terms of Service</a>
+    </main>
+
+    <script src="sample_ui_script.js"></script>
+</body>
+</html>

@@ -23,6 +23,7 @@ uv run adk deploy agent_engine \
 ## 🧪 2. Testing the Agent
 
 ### A. Local Integration Script
+
 To run the automated multi-turn test script that queries the active Reasoning Engine instance directly:
 
 ```bash
@@ -30,6 +31,7 @@ uv run python test_deployed_agent.py
 ```
 
 ### B. Local API Server (Proxy Server)
+
 To run the secure FastAPI proxy server that exposes the endpoints for frontend consumption:
 
 ```bash
@@ -41,6 +43,7 @@ uv run uvicorn api_server:app --host 0.0.0.0 --port 8080 --reload
 ## 🧹 3. Deleting the Agent & Resources
 
 ### A. Force-Deleting the Reasoning Engine (Python Script)
+
 Because reasoning engines contain active sessions (child resources), they must be force-deleted. Execute this Python command in your terminal to delete the engine:
 
 ```bash
@@ -68,6 +71,7 @@ print('Deletion complete!')
 ```
 
 ### B. Checking and Deleting Container Repositories
+
 To list any Docker repositories created during the container build process:
 
 ```bash
@@ -81,6 +85,7 @@ gcloud artifacts repositories delete REPOSITORY_NAME --location=us-central1 --pr
 ```
 
 ### C. Checking and Deleting Staging Buckets
+
 To list Cloud Storage staging buckets:
 
 ```bash
